@@ -399,6 +399,8 @@ end
 
 Base.:(^)(A::NfRelOrdFracIdl, b::Int) = Base.power_by_squaring(A, b)
 
+copy(A::NfRelOrdFracIdl) = A
+
 ################################################################################
 #
 #  Division

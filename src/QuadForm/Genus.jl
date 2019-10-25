@@ -113,7 +113,6 @@ function rank(G::LocalGenusHerm)
   return sum(rank(G, i) for i in 1:length(G))
 end
 
-
 @doc Markdown.doc"""
     ranks(G::LocalGenusHerm)
 
@@ -1046,7 +1045,7 @@ function genera_hermitian(E, rank, signatures, determinant; max_scale = nothing)
     det_val = valuation(ds, p)
     mscale_val = valuation(ms, p)
     det_val = div(det_val, 2)
-    if !is_ram
+    if !isramified(OE, p)
       mscale_val = div(mscale_val, 2)
     end
     push!(local_symbols, local_genera_hermitian(E, p, rank, det_val, mscale_val))

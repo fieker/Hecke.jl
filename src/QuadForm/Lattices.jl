@@ -504,26 +504,33 @@ function generators(L::AbsLat; minimal::Bool = false)
   St = _steinitz_form(pseudo_matrix(L), Val{false})
   d = nrows(St)
   n = degree(L)
-  T = elem_type(base_algebra(L))
+  K = nf(base_ring(L))
+  T = elem_type(K)
   v = Vector{T}[]
   for i in 1:(d - 1)
-    @assert isprincipal(coefficient_ideals(St)[i])[1]
-    push!(v, T[basis_matrix(L)[i, j] for j in 1:d])
+    #@assert isprincipal(coefficient_ideals(St)[i])[1]
+    push!(v, T[matrix(St)[i, j] for j in 1:d])
   end
 
   I = numerator(coefficient_ideals(St)[d])
   den = denominator(coefficient_ideals(St)[d])
-  if minimal && base_algebra(L) isa AnticNumberField
+  if minimal && base_ring(L) isa NfOrd
     b, a = isprincipal(I)
     if b
-      push!(v, T[base_algebra(L)(a)//den * basis_matrix(L)[n, j] for j in 1:d])
+      push!(v, T[K(a)//den * matrix(St)[n, j] for j in 1:d])
     end
     return v
   end
 
-  _assure_weakly_normal_presentation(I)
-  push!(v, T[base_algebra(L)(I.gen_one)//den * basis_matrix(L)[n, j] for j in 1:d])
-  push!(v, T[base_algebra(L)(I.gen_two)//den * basis_matrix(L)[n, j] for j in 1:d])
+  if base_ring(L) isa NfOrd
+    _assure_weakly_normal_presentation(I)
+    push!(v, T[K(I.gen_one)//den * matrix(St)[n, j] for j in 1:d])
+    push!(v, T[K(I.gen_two)//den * matrix(St)[n, j] for j in 1:d])
+  else
+    for g in absolute_basis(I)
+      push!(v, T[K(g)//den * matrix(St)[n, j] for j in 1:d])
+    end
+  end
 
   return v
 end
@@ -735,12 +742,12 @@ end
 
 function Base.:(*)(a, L::HermLat)
   @assert has_ambient_space(L)
-  return hermitian_lattice(base_algebra(L), _module_scale_ideal(a, pseudo_matrix(L)), gram_ambient_space = gram_matrix(ambient_space(L)))
+  return lattice(ambient_space(L), _module_scale_ideal(a, pseudo_matrix(L)))
 end
 
 function Base.:(*)(L::HermLat, a)
   @assert has_ambient_space(L)
-  return hermitian_lattice(base_algebra(L), _module_scale_ideal(a, pseudo_matrix(L)), gram_ambient_space = gram_matrix(ambient_space(L)))
+  return lattice(ambient_space(L), _module_scale_ideal(a, pseudo_matrix(L)))
 end
 
 ################################################################################
@@ -1026,6 +1033,10 @@ function local_basis_matrix(L::AbsLat, p; type::Symbol = :any)
   elseif S === base_ring(R)
     if type == :any
       return _local_basis_matrix_prime_below(pseudo_matrix(L), p)
+    elseif type == :submodule
+      return _local_basis_matrix_prime_below_submodule(pseudo_matrix(L), p)
+    elseif type == :supermodule
+      throw(NotImplemented())
     else
       throw(error("""Invalid :type keyword :$(type).
                      Must be either :any, :submodule, or :supermodule"""))
@@ -1376,25 +1387,308 @@ end
 
 ################################################################################
 #
+#  Maximal integral lattices
+#
+################################################################################
+
+#{Checks whether L is p-maximal integral. If not, a minimal integral over-lattice at p is returned}
+
+function _ismaximal_integral(L::AbsLat, p)
+  R = base_ring(L)
+  E = nf(R)
+  D = prime_decomposition(R, p)
+  e = valuation(discriminant(R), p)
+  if e == 0
+    s = one(E)
+  else
+    s = elem_in_nf(p_uniformizer(D[1][1]))^e
+  end
+
+  M = local_basis_matrix(L, p, type = :submodule)
+  G = gram_matrix(ambient_space(L), M)
+  F, h = ResidueField(R, D[1][1])
+  hext = extend(h, E)
+  sGmodp = map_entries(hext, s * G)
+  Vnullity, V = kernel(sGmodp, side = :left)
+  if Vnullity == 0
+    return true, L
+  end
+
+  hprim = u -> elem_in_nf((h\u))
+
+  for x in _enumerate_lines(F, nrows(V))
+    v = map_entries(hprim, matrix(F, 1, nrows(V), x) * V)
+    res = v * M
+    resvec = [res[1, i] for i in 1:ncols(res)]
+    t = inner_product(ambient_space(L), resvec, resvec)
+    valv = iszero(t) ? inf : valuation(t, D[1][1])
+    if valv >= 2
+      # I don't want to compute the generators
+      #X = [ iszero(inner_product(ambient_space(L), resvec, g)) ? inf : valuation(inner_product(ambient_space(L), resvec, g), D[1][1]) for g in generators(L) ]
+      #@assert minimum(X) >= 1 - e
+      return false, v * M
+    end
+  end
+  return true, L
+end
+
+  #// Check if L is max. integral at p. If not, return either:
+  #// - a minimal integral overlattice at p (minimal flag set)
+  #// - a maximal integral overlattice at p (minimal flag not set).
+function _maximal_integral_lattice(L::AbsLat, p, minimal = true)
+  R = base_ring(L)
+  # already maximal?
+  if valuation(norm(volume(L)), p) == 0 && !isramified(R, p)
+    return true, L
+  end
+
+  B, G, S = jordan_decomposition(L, p)
+  D = prime_decomposition(R, p)
+  P = D[1][1]
+  is_max = true
+
+  if length(D) == 2 # split
+    @assert S[end] != 0
+    if minimal
+      max = 1
+      M = pseudo_matrix(matrix(nf(R), 1, ncols(B[1]), elem_type(nf(R))[B[length(S)][1, i] for i in 1:ncols(B[1])]), [inv(P)])
+    else
+      max = S[end]
+      coeff_ideals = fractional_ideal_type(R)[]
+      _matrix = zero_matrix(nf(R), 0, ncols(B[1]))
+      for i in 1:length(B)
+        if S[i] == 0
+          continue
+        end
+        _matrix = vcat(_matrix, B[i])
+        for k in 1:nrows(B[i])
+          push!(coeff_ideals, inv(P)^(S[i]))
+        end
+      end
+      M = pseudo_matrix(_matrix, coeff_ideals)
+    end
+    _new_pmat = _sum_modules(pseudo_matrix(L), M)
+    _new_pmat = _intersect_modules(_new_pmat, inv(P)^(max) * pseudo_matrix(L))
+    return false, lattice(ambient_space(L), _new_pmat)
+  elseif D[1][2] == 1 # The inert case
+    if S[end] >= 2 then
+      if minimal
+        max = 1
+        M = pseudo_matrix(matrix(nf(R), 1, ncols(B[1]), elem_type(nf(R))[B[length(S)][1, i] for i in 1:ncols(B[1])]), inv(P)^(div(S[end], 2)))
+      else
+        max = S[end]
+        coeff_ideals = fractional_ideal_type(R)[]
+        _matrix = zero_matrix(nf(R), 0, ncols(B[1]))
+        for i in 1:length(B)
+          if !(S[i] >= 2)
+            continue
+          end
+          _matrix = vcat(_matrix, B[i])
+          for k in 1:nrows(B[i])
+            push!(coeff_ideals, inv(P)^(div(S[i], 2)))
+          end
+        end
+        M = pseudo_matrix(_matrix, coeff_ideals)
+      end
+      _new_pmat = _sum_modules(pseudo_matrix(L), M)
+      _new_pmat = _intersect_modules(_new_pmat, inv(P)^(max) * pseudo_matrix(L))
+      L = lattice(ambient_space(L), _new_pmat)
+      if minimal
+        return false, L
+      end
+      B, G, S = jordan_decomposition(L, p)
+      is_max = false
+    end
+    # new we look for zeros of ax^2 + by^2
+    k, h = ResidueField(R, D[1][1])
+    while sum(S[i] * nrows(B[i]) for i in 1:length(B)) > 1
+      k = findfirst(i -> S[i] == 1, 1:length(S))
+      @assert (k !== nothing) k && nrows(B[k]) >= 2
+      r = h\rand(k)
+      # The following might throw ...
+      while valuation(G[k][1, 1] + G[k][2, 2] * norm(r), D[1, 1]) < 2
+        r = h\rand(k)
+      end
+      M = pseudo_matrix(matrix(nf(R), 1, [B[k][1, j] + r * B[k][2, j] : j in 1:ncols(B[k])]), [inv(P)])
+      _new_pmat = _sum_modules(pseudo_matrix(L), M)
+      _new_pmat = _intersect_modules(_new_pmat, inv(P) * pseudo_matrix(L))
+      L = lattice(ambient_space(L), _new_pmat)
+      if minimal
+        return false, L
+      end
+      is_max = false
+      B, G, S = jordan_decomposition(L, p)
+      @assert S[1] >= 0
+    end
+    return is_max, L
+  else # ramified case
+    if S[end] >= 2
+      if minimal
+        max = 1
+        M = pseudo_matrix(matrix(nf(R), 1, ncols(B[1]), elem_type(nf(R))[B[length(S)][1, i] for i in 1:ncols(B[1])]), [inv(P)^(div(S[end], 2))])
+      else
+        max = S[end]
+        coeff_ideals = fractional_ideal_type(R)[]
+        _matrix = zero_matrix(nf(R), 0, ncols(B[1]))
+        for i in 1:length(B)
+          if !(S[i] >= 2)
+            continue
+          end
+          _matrix = vcat(_matrix, B[i])
+          for k in 1:nrows(B[i])
+            push!(coeff_ideals, inv(P)^(div(S[i], 2)))
+          end
+        end
+        M = pseudo_matrix(_matrix, coeff_ideals)
+      end
+      _new_pmat = _sum_modules(pseudo_matrix(L), M)
+      _new_pmat = _intersect_modules(_new_pmat, inv(P)^(max) * pseudo_matrix(L))
+      L = lattice(ambient_space(L), _new_pmat)
+      if minimal
+        return false, L
+      end
+      B, G, S = jordan_decomposition(L, p)
+    end
+    v = valuation(volume(L), P)
+    ok, x = _ismaximal_integral(L, p)
+    while !ok
+      LL = L
+      L = lattice(ambient_space(L), _sum_modules(pseudo_matrix(L), pseudo_matrix(x, [inv(P)])))
+      v = v - 2
+      @assert v == valuation(volume(L), P)
+      @assert valuation(norm(L), p) >= 0
+      if minimal
+        return false, L
+      end
+      is_max = false
+      ok, x = _ismaximal_integral(L, p)
+    end
+    @assert iseven(v)
+    v = div(v, 2)
+    m = rank(L)
+    e = valuation(discriminant(R), p)
+    if isodd(m)
+      valmax = - div(m - 1, 2) * e
+    else
+      valmax = -div(m, 2) * e
+      disc = discriminant(ambient_space(L))
+      if !islocal_norm(nf(R), disc, p)
+        valmax += 1
+      end
+    end
+    @assert v == valmax
+    return is_max, L
+  end
+end
+
+#{Checks whether L is p-maximal integral. If not, a minimal integral over-lattice at p is returned}
+function ismaximal_integral(L::HermLat, p)
+  valuation(norm(L), p) < 0 && error("The lattice must be integral at the prime ideal")
+  return _maximal_integral_lattice(L, p, true)
+end
+
+#{Checks whether L is maximal integral. If not, a minimal integral over-lattice is returned}
+function ismaximal_integral(L::HermLat) 
+  !isintegral(norm(L)) && throw(error("The lattice is not integral"))
+  S = base_ring(L)
+  f = factor(discriminant(S))
+  ff = factor(norm(volume(L)))
+  for (p, e) in ff
+    f[p] = 0
+  end
+  bad = collect(keys(f))
+  for p in bad 
+    ok, LL = _maximal_integral_lattice(L, p, true)
+    if !ok
+      return false, LL
+    end
+  end
+  return true, L
+end
+
+#{Checks if L_p is Norm(L_p)-maximal}
+function ismaximal(L::HermLat, p)
+  iszero(L) && error("The lattice must be non-zero")
+  v = valuation(norm(L), p)
+  x = elem_in_nf(p_uniformizer(p))^(-v)
+  b, LL = ismaximal_integral(rescale(L, x), p)
+  if b
+    return b, L
+  else
+    return lattice(ambient_space(L), pseudo_matrix(LL))
+  end
+end
+
+#{A maximal integral lattice containing L}
+function maximal_integral_lattice(L::HermLat)
+  !isintegral(norm(L)) && throw(error("The lattice is not integral"))
+  S = base_ring(L)
+  f = factor(discriminant(S))
+  ff = factor(norm(volume(L)))
+  for (p, e) in ff
+    f[p] = 0
+  end
+  bad = collect(keys(f))
+  for p in bad
+    _, L = _maximal_integral_lattice(L, p, false)
+  end
+  return L
+end
+
+#{A p-maximal integral lattice over L}
+function maximal_integral_lattice(L::HermLat, p)
+  valuation(norm(L), p) < 0 && throw(error("Lattice is not locally integral"))
+  _, L = _maximal_integral_lattice(L, p, false)
+  return L
+end
+
+function maximal_integral_lattice(V::HermSpace)
+  L = lattice(V, identity_matrix(base_ring(V), rank(V)))
+  fac = collect(factor(scale(L)))
+  S = base_ring(L)
+  s = one(nf(S)) * S
+  while length(fac) > 0
+    nrm = norm(fac[1][1])
+    i = findfirst(i -> norm(fac[i][1]) == nrm, 2:length(fac))
+    if i !== nothing
+      i = i + 1 # findfirst gives the index and not the element
+      @assert fac[i][2] == fac[1][2]
+      s = s * fractional_ideal(S, fac[1][1])^fac[1][2]
+      deleteat!(fac, i)
+    else
+      s = s * inv(fac[1][1])^(div(fac[1][2], 2))
+    end
+    deleteat!(fac, 1)
+  end
+  if !isone(s)
+    L = s * L
+  end
+  return maximal_integral_lattice(L)
+end
+
+################################################################################
+#
 #  Helper
 #
 ################################################################################
 
 function _sum_modules(a::PMat, b::PMat)
-  c = vcat(a, b)
+  H = vcat(a, b)
   H = pseudo_hnf(H, :lowerleft)
   r = 0
   for i in 1:nrows(H)
     if !iszero_row(matrix(H), i)
       r = i
+      break
     end
   end
   @assert r != 0
-  return sub(H, r:nrows(H), 1:cols(H))
+  return sub(H, r:nrows(H), 1:ncols(H))
 end
 
 function _intersect_modules(a::PMat, b::PMat)
   M1 = hcat(a, deepcopy(a))
+  d = ncols(b)
   z = zero_matrix(base_ring(matrix(a)), d, d)
   M2 = hcat(pseudo_matrix(z, b.coeffs), b)
   M = vcat(M1, M2)
@@ -1412,22 +1706,24 @@ end
 _module_scale_ideal(a::PMat, b::NfAbsOrdIdl) = _module_scale_ideal(b, a)
 
 function _module_scale_ideal(a::NfOrdFracIdl, b::PMat)
-  return pseudo_matrix(matrix(b), a .* coefficient_ideals(b))
+  return pseudo_matrix(matrix(b), Ref(a) .* coefficient_ideals(b))
 end
 
 _module_scale_ideal(a::PMat, b::NfOrdFracIdl) = _module_scale_ideal(b, a)
 
 function _module_scale_ideal(a::NfRelOrdIdl, b::PMat)
-  return pseudo_matrix(matrix(b), a .* coefficient_ideals(b))
+  return pseudo_matrix(matrix(b), Ref(a) .* coefficient_ideals(b))
 end
 
 _module_scale_ideal(a::PMat, b::NfRelOrdIdl) = _module_scale_ideal(b, a)
 
 function _module_scale_ideal(a::NfRelOrdFracIdl, b::PMat)
-  return pseudo_matrix(matrix(b), a .* coefficient_ideals(b))
+  return pseudo_matrix(matrix(b), Ref(a) .* coefficient_ideals(b))
 end
 
 _module_scale_ideal(a::PMat, b::NfRelOrdFracIdl) = _module_scale_ideal(b, a)
+
+*(a::NfRelOrdFracIdl, b::PMat) = _module_scale_ideal(a, b)
 
 function _local_basis_matrix(a::PMat, p::NfOrdIdl)
   @assert base_ring(a) == order(p)
@@ -1464,7 +1760,35 @@ function _local_basis_matrix_prime_below(a::PMat, p)
   return z
 end
 
+function _local_basis_matrix_prime_below_submodule(a::PMat, p)
+  @assert base_ring(base_ring(a)) == order(p)
+  R = base_ring(a)
+  D = prime_decomposition(R, p)
+#  unis = [p_uniformizer(q[1]) for q in D]
+#  @assert all(valuation(unis[i], D[i][1]) == 1 for i in 1:length(D))
+#  @assert all(sum(valuation(unis[i], D[j][1]) for j in 1:length(D)) == 1 for i in 1:length(D))
+  z = zero_matrix(base_ring(matrix(a)), nrows(a), ncols(a))
+  for i in 1:nrows(a)
+    c = coefficient_ideals(a)[i]
+    f = factor(c)
+    if length(f) == 0
+      x = one(nf(R))
+    else
+      x = approximate([e for (_, e) in f], [p for (p, _) in f])
+    end
+    #x = unis[1]^valuation(c, D[1][1])
+    #for k in 2:length(D)
+    #  x = x * unis[k]^valuation(c, D[k][1])
+    #end
+    for j in 1:ncols(a)
+      z[i, j] = x * matrix(a)[i, j]
+    end
+  end
+  return z
+end
+
 function _local_basis_submodule_matrix(a::PMat, p::NfOrdIdl)
+  @assert base_ring(base_ring(a)) == order(p)
   z = zero_matrix(base_ring(matrix(a)), nrows(a), ncols(a))
   for i in 1:nrows(a)
     c = coefficient_ideals(a)[i]
@@ -1487,14 +1811,7 @@ function _local_basis_submodule_matrix(a::PMat, p::NfOrdIdl)
 end
 
 function _local_basis_supermodule_matrix(a::PMat, p::NfOrdIdl)
-  z = zero_matrix(base_ring(matrix(a)), nrows(a), ncols(a))
-  for i in 1:nrows(a)
-    # need to do an approximate or approximate_simple
-    for j in 1:ncols(a)
-      z[i, j] = x * matrix(a)[i, j]
-    end
-  end
-  return z
+  throw(NotImplemented())
 end
 
 function image(S::T, A::NfOrdFracIdl) where {T <: Map}
@@ -1678,6 +1995,17 @@ function absolute_basis(I::NfRelOrdFracIdl)
   return res
 end
 
+function absolute_basis(I::NfRelOrdIdl)
+  res = elem_type(nf(order(I)))[]
+  pb = pseudo_basis(I)
+  for (e, I) in pb
+    for b in absolute_basis(I)
+      push!(res, e * b)
+    end
+  end
+  return res
+end
+
 order(::fmpz) = FlintZZ
 
 uniformizer(p::fmpz) = p
@@ -1744,11 +2072,10 @@ function _sign(x::acb)
   end
 end
 
-#// Given an element b in a number field K and sets of finite and infinite 
-#// places P and I of K, return an element a in K such that 
-#// { v: (a,b)_v = -1 } = P \cup I
-#// Note that the function computes the unit and class groups of K!
-
+# Given an element b in a number field K and sets of finite and infinite 
+# places P and I of K, return an element a in K such that 
+# { v: (a,b)_v = -1 } = P \cup I
+# Note that the function computes the unit and class groups of K!
 function _find_quaternion_algebra(b, P, I)
   @assert iseven(length(I) + length(P))
   @assert all(p -> !islocal_square(b, p), P)
@@ -1836,7 +2163,6 @@ function _find_quaternion_algebra(b, P, I)
   end
   fl, v = can_solve(M, target, side = :left)
   @assert fl
-  #@show v
   z = evaluate(FacElem(Dict(elts[i] => Int(lift(v[1, i])) for i in 1:ncols(v))))
   @assert sign_vector(z) == target
   return z
@@ -1946,3 +2272,49 @@ function _non_norm_rep(E, K, p)
     error("This dosses not make any sense!")
   end
 end
+
+function _enumerate_lines(K, n)
+  if n == 1
+    return Vector{elem_type(K)}[elem_type(K)[one(K)]]
+  end
+  _all_nminusone = Iterators.product([K for i in 1:n-1]...)
+  res = Vector{elem_type(K)}[]
+  for w in _all_nminusone
+    v = elem_type(K)[one(K)]
+    append!(v, collect(w))
+    push!(res, v)
+  end
+  _all_rest = _enumerate_lines(K, n - 1)
+  for w in _all_rest
+    v = elem_type(K)[zero(K)]
+    append!(v, w)
+    push!(res, v)
+  end
+  return res
+end
+
+function ^(A::NfRelOrdFracIdl, a::Int)
+  if a == 0
+    B = one(nf(order(A))) * order(A)
+    return B
+  end
+
+  if a == 1
+    return A # copy?
+  end
+
+  if a < 0
+    return inv(A^(-a))
+  end
+
+  if a == 2
+    return A*A
+  end
+
+  if mod(a, 2) == 0
+    return (A^div(a, 2))^2
+  else
+    return A * A^(a - 1)
+  end
+end
+

@@ -244,7 +244,7 @@ function automorphisms(C::CyclotomicExt; gens::Vector{NfToNfMor} = small_generat
   U, mU = unit_group(R)
   if iscyclic(U)
     k = degree(C.Kr)
-    expo = divexact(eulerphi(fmpz(C.n)), k)
+    expo = divexact(euler_phi(fmpz(C.n)), k)
     l = hom(C.Kr, C.Kr, gen(C.Kr)^Int(lift(mU(U[1])^expo)), check = false)
     l1 = hom(C.Ka, C.Ka, C.mp[1]\(l(C.mp[1](gen(C.Ka)))), check = false)
     push!(gnew, l1)

@@ -170,9 +170,6 @@ function round(a::fmpq)
   return round(fmpz, a)
 end
 
-function zero(::Type{Nemo.fmpz})
-  return fmpz(0)
-end
 
 function one(::Type{Nemo.fmpz})
   return fmpz(1)
@@ -693,11 +690,6 @@ function sunit_group(S::Array{fmpz, 1})
 
   return u, mp
 end
-
-gcd(a::fmpz, b::Integer) = gcd(a, fmpz(b))
-gcd(a::Integer, b::fmpz) = gcd(fmpz(a), b)
-lcm(a::fmpz, b::Integer) = lcm(a, fmpz(b))
-lcm(a::Integer, b::fmpz) = lcm(fmpz(a), b)
 
 @doc Markdown.doc"""
     isprime_power(n::fmpz) -> Bool

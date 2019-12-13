@@ -247,8 +247,4 @@ function characteristic(R::ResRing{fmpz})
   return abs(modulus(R))
 end
 
-function characteristic(R::FlintRationalField)
-  return fmpz(0)
-end
-
 jacobi_symbol(x::Integer, y::fmpz) = jacobi_symbol(fmpz(x), y)

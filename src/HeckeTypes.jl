@@ -312,22 +312,23 @@ end
 Type for rows of sparse matrices, to create one use
 `sparse_row`
 """
-mutable struct SRow{T}
+mutable struct SRow{T, S} #where S <: AbstractVector{T}
   #in this row, in column pos[1] we have value values[1]
   base_ring
-  values::Vector{T}
+  values::S
   pos::Vector{Int}
 
-  function SRow{T}(R::Ring) where T
-    r = new{T}(R)
-    r.values = Vector{T}()
-    r.pos = Vector{Int}()
-    r.base_ring = R
+  function SRow(R::Ring)
+    r = new{elem_type(R), Vector{elem_tye(R)}}(R, Vector{elem_type(R)}(), Vector{Int}())
+    return r
+  end
+  function SRow(R::Ring, S::AbstractVector)
+    r = new{elem_type(R), typeof(S)}(R, S, Vector{Int}())
     return r
   end
 
-  function SRow{T}(R::Ring, A::Vector{Tuple{Int, T}}) where T
-    r = SRow{T}(R)
+  function SRow(R::Ring, A::Vector{Tuple{Int, T}}) where T
+    r = SRow(R)
     for (i, v) = A
       if !iszero(v)
         @assert parent(v) === R
@@ -339,8 +340,8 @@ mutable struct SRow{T}
     return r
   end
 
-  function SRow{T}(R::Ring, A::Vector{Tuple{Int, Int}}) where T
-    r = SRow{T}(R)
+  function SRow(R::Ring, A::Vector{Tuple{Int, Int}})
+    r = SRow(R)
     for (i, v) = A
       if !iszero(v)
         push!(r.pos, i)
@@ -352,7 +353,7 @@ mutable struct SRow{T}
   end
 
   function SRow{T}(A::SRow{S}) where {T, S}
-    r = new{T}(R)
+    r = new{T, Vector{T}}(R)
     r.values = Array{T}(undef, length(A.pos))
     r.pos = copy(A.pos)
     for i=1:length(r.values)
@@ -361,9 +362,9 @@ mutable struct SRow{T}
     return r
   end
 
-  function SRow{T}(R::Ring, pos::Vector{Int}, val::Vector{T}) where {T}
+  function SRow(R::Ring, pos::Vector{Int}, val::Vector{T}) where {T}
     length(pos) == length(val) || error("Arrays must have same length")
-    r = SRow{T}(R)
+    r = SRow{typeof(val)}(R)
     for i=1:length(pos)
       v = val[i]
       if !iszero(v)

@@ -42,10 +42,6 @@ function sparse_row(R::Ring)
   return SRow{elem_type(R)}(R)
 end
 
-function SRow(R::Ring)
-  return SRow{elem_type(R)}(R)
-end
-
 const _sort = sort
 @doc Markdown.doc"""
     sparse_row(R::Ring, J::Vector{Tuple{Int, T}}) -> SRow{T}
@@ -603,13 +599,12 @@ function add_scaled_row!(a::SRow{T}, b::SRow{T}, c::T) where T
   return b
 end
 
-function add_scaled_row(Ai::SRow{ZZRingElem}, Aj::SRow{ZZRingElem}, c::ZZRingElem)
+function add_scaled_row3(Ai::SRow{ZZRingElem}, Aj::SRow{ZZRingElem}, c::ZZRingElem)
   sr = sparse_row(FlintZZ)
   pi = 1
   pj = 1
   @assert c != 0
   n = ZZRingElem()
-  nb = 0
   while pi <= length(Ai.pos) && pj <= length(Aj.pos)
     if Ai.pos[pi] < Aj.pos[pj]
       push!(sr.pos, Ai.pos[pi])
@@ -625,7 +620,7 @@ function add_scaled_row(Ai::SRow{ZZRingElem}, Aj::SRow{ZZRingElem}, c::ZZRingEle
 
 #      n = c*Ai.values[pi] + Aj.values[pj]
       if !iszero(n)
-        nb = max(nb, nbits(n))
+#        nb = max(nb, nbits(n))
         push!(sr.pos, Ai.pos[pi])
         push!(sr.values, n)
         n = ZZRingElem()
@@ -648,20 +643,74 @@ function add_scaled_row(Ai::SRow{ZZRingElem}, Aj::SRow{ZZRingElem}, c::ZZRingEle
   return sr
 end
 
-function add_scaled_row!(Ai::SRow{ZZRingElem}, Aj::SRow{ZZRingElem}, c::ZZRingElem)
+function add_scaled_row2(Ai::SRow{ZZRingElem}, Aj::SRow{ZZRingElem}, c::ZZRingElem)
   sr = sparse_row(FlintZZ)
-  pi = 1
-  pj = 1
   @assert c != 0
   n = ZZRingElem()
-  nb = 0
-  while pi <= length(Ai.pos) && pj <= length(Aj.pos)
-    if Ai.pos[pi] < Aj.pos[pj]
-      push!(sr.pos, Ai.pos[pi])
+  vi = iterate(Ai)
+  vj = iterate(Aj)
+  while vi !== nothing && vj !== nothing
+    pos_i, val_i = vi[1]
+    pos_j, val_j = vj[1]
+    if pos_i < pos_j
+      push!(sr.pos, pos_i)
+      push!(sr.values, c*val_i)
+      vi = iterate(Ai, vi[2])
+    elseif pos_i > pos_j
+      push!(sr.pos, pos_j)
+      push!(sr.values, val_j)
+      vj = iterate(Aj, vj[2])
+    else
+      n = mul!(n, c, val_i)
+      n = add!(n, n, val_j)
+
+#      n = c*Ai.values[pi] + Aj.values[pj]
+      if !iszero(n)
+#        nb = max(nb, nbits(n))
+        push!(sr.pos, pos_i)
+        push!(sr.values, n)
+        n = ZZRingElem()
+      end
+      vi = iterate(Ai, vi[2])
+      vj = iterate(Aj, vj[2])
+    end
+  end
+  while vi !== nothing
+    pos_i, val_i = vi[1]
+    push!(sr.pos, pos_i)
+    push!(sr.values, c*val_i)
+    vi = iterate(Ai, vi[2])
+  end
+  while vj !== nothing
+    pos_j, val_j = vj[1]
+    push!(sr.pos, pos_j)
+    push!(sr.values, val_j)
+    vj = iterate(Aj, vj[2])
+  end
+#  @show nb
+  return sr
+end
+
+
+function add_scaled_row(Ai::SRow{ZZRingElem}, Aj::SRow{ZZRingElem}, c::ZZRingElem)
+  sr = sparse_row(FlintZZ)
+  @assert c != 0
+  n = ZZRingElem()
+  pi = 1
+  pj = 1
+  li = length(Ai)
+  lj = length(Aj)
+  sizehint!(sr.pos, li+lj)
+  sizehint!(sr.values, li+lj)
+  while pi <= li && pj <= lj
+    pos_i = Ai.pos[pi]
+    pos_j = Aj.pos[pj]
+    if pos_i < pos_j
+      push!(sr.pos, pos_i)
       push!(sr.values, c*Ai.values[pi])
       pi += 1
-    elseif Ai.pos[pi] > Aj.pos[pj]
-      push!(sr.pos, Aj.pos[pj])
+    elseif pos_i > pos_j
+      push!(sr.pos, pos_j)
       push!(sr.values, Aj.values[pj])
       pj += 1
     else
@@ -670,8 +719,8 @@ function add_scaled_row!(Ai::SRow{ZZRingElem}, Aj::SRow{ZZRingElem}, c::ZZRingEl
 
 #      n = c*Ai.values[pi] + Aj.values[pj]
       if !iszero(n)
-        nb = max(nb, nbits(n))
-        push!(sr.pos, Ai.pos[pi])
+#        nb = max(nb, nbits(n))
+        push!(sr.pos, pos_i)
         push!(sr.values, n)
         n = ZZRingElem()
       end
@@ -679,17 +728,22 @@ function add_scaled_row!(Ai::SRow{ZZRingElem}, Aj::SRow{ZZRingElem}, c::ZZRingEl
       pj += 1
     end
   end
-  while pi <= length(Ai.pos)
+  while pi <= li
     push!(sr.pos, Ai.pos[pi])
     push!(sr.values, c*Ai.values[pi])
     pi += 1
   end
-  while pj <= length(Aj.pos)
+  while pj <= lj
     push!(sr.pos, Aj.pos[pj])
     push!(sr.values, Aj.values[pj])
     pj += 1
   end
 #  @show nb
+  return sr
+end
+
+function add_scaled_row!(Ai::SRow{ZZRingElem}, Aj::SRow{ZZRingElem}, c::ZZRingElem)
+  sr = add_scaled_row(Ai, Aj, c)
   Aj.pos = sr.pos
   Aj.values = sr.values
   return sr
